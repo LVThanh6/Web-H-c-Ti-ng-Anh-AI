@@ -15,7 +15,7 @@ const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GE
 // Tăng giới hạn payload lên 20mb để tránh lỗi HTTP 413 khi nhận file PDF/DOCX dung lượng lớn
 app.use(express.json({ limit: '20mb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 30 }));
-app.use(express.static(path.join(path.dirname(fileURLToPath(import.meta.url)), '..')));
+app.use(express.static(path.dirname(fileURLToPath(import.meta.url))));
 
 const S = Type.STRING;
 const entry = {
