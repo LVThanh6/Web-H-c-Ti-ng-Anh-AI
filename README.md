@@ -1,16 +1,20 @@
 # LinguaRead AI
 
+Yêu cầu Node.js và npm để chạy backend.
+
 ## Chạy chế độ demo (không cần backend)
 Mở thư mục bằng một static server (ví dụ `npx serve .`) rồi vào `index.html`. Bấm "Dùng bài mẫu" để thử. Dữ liệu từ vựng là dữ liệu minh họa.
 
 ## Chạy với Gemini
 1. `npm install`
-2. `cp .env.example .env` rồi điền `GEMINI_API_KEY` (khóa chỉ nằm ở server, không đưa lên Git).
+2. Sao chép `.env.example` thành `.env` (PowerShell: `Copy-Item .env.example .env`) rồi điền `GEMINI_API_KEY` (khóa chỉ nằm ở server, không đưa lên Git).
 3. `npm start` → mở http://localhost:3000
+
+Để kiểm tra cú pháp JavaScript, chạy `npm run check`.
 
 ## Cấu trúc
 - `index.html`, `styles.css`, `app.js`: giao diện và logic (tokenizer, chọn từ, phát âm, từ vựng, flashcard)
-- `server/server.js`: Express + `@google/genai`, schema JSON, giới hạn tốc độ
+- `server.js`: Express + `@google/genai`, schema JSON, giới hạn tốc độ
 - Dữ liệu người dùng lưu trong localStorage của trình duyệt
 
 ## Giới hạn hiện tại
