@@ -12,6 +12,7 @@ const app = express();
 const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
 
+app.set('trust proxy', 1);
 // Tăng giới hạn payload lên 20mb để tránh lỗi HTTP 413 khi nhận file PDF/DOCX dung lượng lớn
 app.use(express.json({ limit: '20mb' }));
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 30 }));
