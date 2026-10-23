@@ -61,7 +61,10 @@ const DEMO_DICT = {
 async function api(path, body) {
   const r = await fetch('/api/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || 'Lỗi máy chủ (' + r.status + ')');
+  if (!r.ok) {
+    const message = typeof d.error === 'string' ? d.error : d.error?.message;
+    throw new Error(message || 'Lỗi máy chủ (' + r.status + ')');
+  }
   return d;
 }
 
@@ -177,9 +180,8 @@ function newView() {
       const d = await api('analyze', { text, level, title, file: fileB64, fileName: S.file?.name });
       p = { id: uid(), title: d.title || title || 'Bài đọc mới', level, text: d.originalText || text, vocab: d.vocabulary || [], demo: false };
     } catch (e) {
-      if (fileB64) { btn.disabled = false; btn.textContent = '✨ Phân tích bài đọc bằng AI'; return msg(e.message + ' — cần chạy backend để xử lý PDF/DOCX/DOC.', 'err'); }
-      p = { id: uid(), title: title || 'Bài đọc mới', level, text, vocab: Object.values(DEMO_DICT), demo: true };
-      toast('Chưa kết nối Gemini: đang ở chế độ demo.');
+      btn.disabled = false; btn.textContent = '✨ Phân tích bài đọc bằng AI';
+      return msg('Không phân tích được bằng AI: ' + e.message, 'err');
     }
     p.wordCount = wc(p.text); S.passages.unshift(p); persist(); location.hash = '#/read/' + p.id;
   }

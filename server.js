@@ -9,7 +9,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 const app = express();
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
 
 // Tăng giới hạn payload lên 20mb để tránh lỗi HTTP 413 khi nhận file PDF/DOCX dung lượng lớn
