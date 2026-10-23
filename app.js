@@ -73,9 +73,21 @@ const S = {
   passages: store.get('lr_passages', []),
   saved: store.get('lr_saved', []),
   cur: null, tokens: [], sel: new Set(), mode: 'none', phrase: '', phraseRes: null, busy: false,
-  inMode: 'paste', file: null, cache: {}, card: { list: [], i: 0, flip: false, done: 0, known: 0 }
+  inMode: 'paste', file: null, cache: store.get('lr_lookup_cache', {}), card: { list: [], i: 0, flip: false, done: 0, known: 0 }
 };
-const persist = () => { store.set('lr_passages', S.passages); store.set('lr_saved', S.saved); };
+const persist = () => {
+  try {
+    store.set('lr_passages', S.passages);
+    store.set('lr_saved', S.saved);
+    store.set('lr_lookup_cache', S.cache);
+    return true;
+  } catch (e) {
+    console.error('[LinguaRead] Could not save data locally.', e);
+    toast('Không thể lưu dữ liệu trên thiết bị. Hãy kiểm tra dung lượng trình duyệt.');
+    return false;
+  }
+};
+const logLocalSave = (type, count) => console.info(`[LinguaRead] Saved ${type} locally.`, { count, at: new Date().toISOString() });
 const isSaved = w => S.saved.some(x => x.term.toLowerCase() === w.toLowerCase());
 
 /* ===== Router ===== */
@@ -183,7 +195,9 @@ function newView() {
       btn.disabled = false; btn.textContent = '✨ Phân tích bài đọc bằng AI';
       return msg('Không phân tích được bằng AI: ' + e.message, 'err');
     }
-    p.wordCount = wc(p.text); S.passages.unshift(p); persist(); location.hash = '#/read/' + p.id;
+    p.wordCount = wc(p.text); S.passages.unshift(p);
+    if (persist()) logLocalSave('passage', S.passages.length);
+    location.hash = '#/read/' + p.id;
   }
 }
 
@@ -250,11 +264,28 @@ function sentenceOf(t) {
 }
 async function lookup(t) {
   if (!t) return; // Đã thêm kiểm tra guard clause
-  if (findEntry(t.s)) return renderPanel();
+  const existing = findEntry(t.s);
+  if (existing) { rememberLookup(t.s, existing); return renderPanel(); }
   S.busy = true; renderPanel();
-  try { S.cache[t.s.toLowerCase()] = await api('lookup', { word: t.s, sentence: sentenceOf(t) }); }
+  try { rememberLookup(t.s, await api('lookup', { word: t.s, sentence: sentenceOf(t) })); }
   catch (e) { S.cache[t.s.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này. ' + (S.cur.demo ? 'Hãy chạy backend và đặt GEMINI_API_KEY để tra mọi từ.' : e.message) }; }
   S.busy = false; renderPanel(); renderText();
+}
+function rememberLookup(word, entry) {
+  if (!entry || entry.error) return;
+  const key = word.toLowerCase(), term = entry.term || word;
+  const isNewLookup = !S.cache[key];
+  S.cache[key] = entry;
+  const isNewVocab = !isSaved(term);
+  if (isNewVocab) {
+    S.saved.push({
+      id: uid(), term, ipa: entry.ipa, vi: entry.vi, pos: entry.pos, exEn: entry.exEn, exVi: entry.exVi,
+      source: S.cur.title, level: S.cur.level, date: new Date().toISOString().slice(0, 10), status: 'new', note: ''
+    });
+  }
+  if (isNewLookup || isNewVocab) {
+    if (persist()) logLocalSave('looked-up word', S.saved.length);
+  }
 }
 function refresh() { renderText(); renderPanel(); bar(); }
 const selWords = () => [...S.sel].sort((a, b) => a - b).map(i => S.tokens[i].s);
@@ -366,7 +397,17 @@ function reviewView() {
 
 /* ===== Đề đọc hiểu trắc nghiệm ===== */
 const QZ = store.get('lr_quiz', {});
-const qsave = () => store.set('lr_quiz', QZ);
+const qsave = () => {
+  try {
+    store.set('lr_quiz', QZ);
+    console.info('[LinguaRead] Saved quiz locally.', { count: Object.keys(QZ).length, at: new Date().toISOString() });
+    return true;
+  } catch (e) {
+    console.error('[LinguaRead] Could not save quizzes locally.', e);
+    toast('Không thể lưu bài kiểm tra trên thiết bị. Hãy kiểm tra dung lượng trình duyệt.');
+    return false;
+  }
+};
 const wrapWords = str => tokenize(str).map(t => t.word ? `<span class="qw" tabindex="0">${esc(t.s)}</span>` : esc(t.s)).join('');
 // Dữ liệu minh họa: chỉ dùng khi chưa có backend, chỉ cho bài mẫu
 const DEMO_QUIZ = [
@@ -421,7 +462,9 @@ function bindLookup(root) {
     const el = e.target.closest('.qw'); if (!el) return;
     e.preventDefault(); const w = el.textContent;
     pop.hidden = false; pop.innerHTML = '<p>Đang tra từ...</p>';
-    if (!findEntry(w)) { try { S.cache[w.toLowerCase()] = await api('lookup', { word: w, sentence: el.closest('[data-ctx]')?.dataset.ctx || w }); } catch (er) { S.cache[w.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này.' }; } }
+    const existing = findEntry(w);
+    if (existing) rememberLookup(w, existing);
+    else { try { rememberLookup(w, await api('lookup', { word: w, sentence: el.closest('[data-ctx]')?.dataset.ctx || w })); } catch (er) { S.cache[w.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này.' }; } }
     pop.innerHTML = `<button class="btn sm" id="xp" style="float:right" aria-label="Đóng">✕</button>` + card(findEntry(w), w);
     $('#xp').onclick = () => pop.hidden = true;
     pop.querySelectorAll('[data-say]').forEach(b => b.onclick = () => pron.speak(b.dataset.say));

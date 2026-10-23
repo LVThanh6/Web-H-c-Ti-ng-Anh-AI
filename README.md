@@ -15,7 +15,7 @@ Mở thư mục bằng một static server (ví dụ `npx serve .`) rồi vào `
 ## Cấu trúc
 - `index.html`, `styles.css`, `app.js`: giao diện và logic (tokenizer, chọn từ, phát âm, từ vựng, flashcard)
 - `server.js`: Express + `@google/genai`, schema JSON, giới hạn tốc độ
-- Dữ liệu người dùng lưu trong localStorage của trình duyệt
+- Bài đọc, từ đã lưu, kết quả tra từ, đề kiểm tra, câu trả lời và kết quả bài làm được tự động lưu trong `localStorage` của trình duyệt trên thiết bị hiện tại; dữ liệu không tự đồng bộ giữa thiết bị. Log lưu cục bộ xem trong Developer Tools → Console (không ghi nội dung bài đọc hoặc từ khóa).
 
 ## Giới hạn hiện tại
 - DOC cũ chưa hỗ trợ (hãy lưu thành DOCX); PDF gửi trực tiếp cho Gemini; DOCX trích xuất bằng mammoth.
