@@ -43,32 +43,6 @@ function tokenize(text) {
   return out;
 }
 
-/* ===== Dữ liệu minh họa (KHÔNG phải kết quả Gemini) ===== */
-const SAMPLE = {
-  title: 'Protecting Our Planet', level: 'B1',
-  text: 'Protecting our planet requires a sustainable approach to the way we live. Small changes in our daily habits can help preserve natural resources and reduce pollution.\n\nGovernments and communities must work together to tackle climate change. Renewable energy, such as solar power, can lower emissions and make cities cleaner.'
-};
-const DEMO_DICT = {
-  sustainable: { term: 'sustainable', pos: 'adjective', ipa: '/səˈsteɪnəbəl/', vi: 'bền vững', ctx: 'Có thể duy trì lâu dài mà không làm cạn kiệt tài nguyên hay gây hại môi trường.', defEn: 'Able to continue for a long time without causing damage.', exEn: 'We need sustainable solutions to protect the environment.', exVi: 'Chúng ta cần các giải pháp bền vững để bảo vệ môi trường.', syn: ['viable', 'lasting'], forms: 'sustain, sustainability' },
-  preserve: { term: 'preserve', pos: 'verb', ipa: '/prɪˈzɜːv/', vi: 'bảo tồn, gìn giữ', ctx: 'Giữ cho tài nguyên thiên nhiên không bị mất đi.', defEn: 'To keep something in its original or good condition.', exEn: 'We must preserve our forests.', exVi: 'Chúng ta phải bảo tồn các khu rừng.', syn: ['protect', 'conserve'], forms: 'preservation' },
-  reduce: { term: 'reduce', pos: 'verb', ipa: '/rɪˈdjuːs/', vi: 'giảm', ctx: 'Làm cho mức ô nhiễm ít đi.', defEn: 'To make something smaller or less.', exEn: 'Cycling can reduce traffic.', exVi: 'Đi xe đạp có thể giảm giao thông.', syn: ['decrease', 'cut'], forms: 'reduction' },
-  tackle: { term: 'tackle', pos: 'verb', ipa: '/ˈtækəl/', vi: 'giải quyết, xử lý', ctx: 'Bắt tay giải quyết một vấn đề khó.', defEn: 'To try to deal with a difficult problem.', exEn: 'The city plans to tackle air pollution.', exVi: 'Thành phố dự định giải quyết ô nhiễm không khí.', syn: ['address', 'handle'], forms: '' },
-  renewable: { term: 'renewable', pos: 'adjective', ipa: '/rɪˈnjuːəbəl/', vi: 'có thể tái tạo', ctx: 'Nguồn năng lượng không bị cạn kiệt.', defEn: 'Able to be replaced naturally.', exEn: 'Wind is a renewable resource.', exVi: 'Gió là nguồn tài nguyên tái tạo.', syn: [], forms: 'renew' },
-  emissions: { term: 'emissions', pos: 'noun', ipa: '/ɪˈmɪʃənz/', vi: 'khí thải', ctx: 'Lượng khí thải ra môi trường.', defEn: 'Gases sent into the air.', exEn: 'Cars produce emissions.', exVi: 'Xe hơi thải ra khí thải.', syn: ['discharge'], forms: 'emit' }
-};
-
-/* ===== Gọi backend (Gemini nằm ở server, không có API key ở đây) ===== */
-async function api(path, body) {
-  const r = await fetch('/api/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const message = typeof d.error === 'string' ? d.error : d.error?.message;
-    throw new Error(message || 'Lỗi máy chủ (' + r.status + ')');
-  }
-  return d;
-}
-
-/* ===== Trạng thái ===== */
 const S = {
   passages: store.get('lr_passages', []),
   saved: store.get('lr_saved', []),
@@ -173,7 +147,126 @@ function newView() {
   const msg = (t, k) => $('#status').innerHTML = t ? `<div class="msg ${k}" role="alert">${esc(t)}</div>` : '';
   document.querySelectorAll('.tab').forEach(t => t.onclick = () => setMode(t.dataset.m));
   $('#clr').onclick = () => { S.file = null; const t = $('#txt'); if (t) t.value = ''; msg(''); showFile(); count(); };
-  $('#demo').onclick = () => { setMode('paste'); $('#txt').value = SAMPLE.text; $('#title').value = SAMPLE.title; count(); };
+  const loadSampleJson = async (file, label) => {
+    const offlineSamples = window.LINGUAREAD_OFFLINE_SAMPLES;
+    if (location.protocol === 'file:') {
+      if (!offlineSamples) throw new Error(`${label}: thiếu samples/offline.js. Chạy npm run build:samples trong thư mục dự án rồi mở lại index.html.`);
+      if (file === 'index.json') return offlineSamples.index;
+      const sample = offlineSamples.samples[file];
+      if (!sample) throw new Error(`${label}: không tìm thấy ${file} trong gói offline.`);
+      return sample;
+    }
+    let response;
+    try {
+      response = await fetch(new URL(`samples/${encodeURIComponent(file)}`, document.baseURI), { cache: 'no-store' });
+    } catch {
+      throw new Error(`${label}: không kết nối được. Hãy kiểm tra máy chủ đã triển khai thư mục samples cùng ứng dụng chưa.`);
+    }
+    if (!response.ok) throw new Error(`${label}: máy chủ trả về HTTP ${response.status}.`);
+    try {
+      return await response.json();
+    } catch {
+      throw new Error(`${label}: phản hồi không phải JSON hợp lệ.`);
+    }
+  };
+  const openSample = async file => {
+    try {
+      const sample = await loadSampleJson(file, 'Không tải được bài mẫu');
+      if (!sample.id || !sample.title || !sample.text || !Array.isArray(sample.vocabulary)) {
+        throw new Error('File JSON bài mẫu thiếu id, title, text hoặc vocabulary.');
+      }
+      if (sample.quiz !== undefined) {
+        const questions = sample.quiz?.questions;
+        if (!Array.isArray(questions)) throw new Error('quiz.questions trong bài mẫu phải là một mảng.');
+        const ids = new Set();
+        for (const [index, question] of questions.entries()) {
+          if (!/^[a-z0-9_-]+$/i.test(question.id || '') || ids.has(question.id) ||
+            typeof question.question !== 'string' || !question.question.trim() ||
+            !Array.isArray(question.options) || question.options.length !== 4) {
+            throw new Error(`Câu hỏi mẫu số ${index + 1} cần id riêng, nội dung và đúng 4 lựa chọn.`);
+          }
+          ids.add(question.id);
+          const optionIds = question.options.map(option => option.id);
+          if (new Set(optionIds).size !== 4 || ['A', 'B', 'C', 'D'].some(id => !optionIds.includes(id)) ||
+            !optionIds.includes(question.correctAnswer) ||
+            question.options.some(option => typeof option.text !== 'string' || !option.text.trim())) {
+            throw new Error(`Câu hỏi mẫu số ${index + 1} có mã lựa chọn trùng hoặc đáp án đúng không hợp lệ.`);
+          }
+        }
+      }
+      const words = new Set((sample.text.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).map(word => word.toLowerCase()));
+      const dictionaryTerms = new Set(sample.vocabulary.map(entry => entry.term?.toLowerCase()).filter(Boolean));
+      const vocabularyCoverage = { matched: [...words].filter(word => dictionaryTerms.has(word)).length };
+      const existing = S.passages.filter(p => p.demo && (
+        p.sampleId === sample.id || (p.title === sample.title && p.text === sample.text)
+      ));
+      const p = existing[0] || { id: uid() };
+      const staleQuiz = QZ[p.id]?.quiz && (
+        QZ[p.id].quiz.level !== (sample.level || 'B1') ||
+        !QZ[p.id].quiz.title?.startsWith(sample.title)
+      );
+      const changed = existing.some(passage => passage.text !== sample.text ||
+        JSON.stringify(passage.quiz || null) !== JSON.stringify(sample.quiz || null)) || staleQuiz;
+      const duplicateIds = new Set(existing.slice(1).map(passage => passage.id));
+      if (changed) delete QZ[p.id];
+      for (const id of duplicateIds) delete QZ[id];
+      if (duplicateIds.size) S.passages = S.passages.filter(passage => !duplicateIds.has(passage.id));
+      let storedQuiz = QZ[p.id];
+      if (sample.quiz?.questions?.length && (
+        storedQuiz?.quiz?.sourceQuizId !== sample.id ||
+        storedQuiz.quiz.questionCount !== sample.quiz.questions.length ||
+        JSON.stringify(storedQuiz.quiz.questions) !== JSON.stringify(sample.quiz.questions)
+      )) {
+        storedQuiz = {
+          quiz: {
+            ...sample.quiz,
+            quizId: 'local-demo',
+            sourceQuizId: sample.id,
+            questionCount: sample.quiz.questions.length
+          },
+          answers: {}, start: Date.now(), result: null
+        };
+        QZ[p.id] = storedQuiz;
+      } else if (!sample.quiz?.questions?.length && storedQuiz?.quiz?.sourceQuizId === sample.id) {
+        delete QZ[p.id];
+        storedQuiz = null;
+      }
+      for (const passage of existing) Object.assign(passage, {
+        sampleId: sample.id, title: sample.title, level: sample.level || 'B1', text: sample.text,
+        vocab: sample.vocabulary, quiz: sample.quiz, demo: true, wordCount: wc(sample.text), vocabularyCoverage
+      });
+      if (!existing.length) {
+        Object.assign(p, {
+          sampleId: sample.id, title: sample.title, level: sample.level || 'B1', text: sample.text,
+          vocab: sample.vocabulary, quiz: sample.quiz, demo: true, wordCount: wc(sample.text), vocabularyCoverage
+        });
+        S.passages.unshift(p);
+      }
+      if ((changed || duplicateIds.size || storedQuiz) && !qsave()) return;
+      if (persist()) logLocalSave('sample passage', S.passages.length);
+      location.hash = '#/read/' + p.id;
+    } catch (e) {
+      msg('Không mở được bài mẫu: ' + e.message, 'err');
+    }
+  };
+  $('#demo').onclick = async () => {
+    msg('Đang tải danh sách bài mẫu...', 'ok');
+    try {
+      const index = await loadSampleJson('index.json', 'Không tải được danh sách bài mẫu');
+      if (!Array.isArray(index.samples) || !index.samples.length) throw new Error('Danh sách bài mẫu đang trống.');
+      const sampleCatalog = index.samples.filter(sample => sample.id && sample.title && /^[a-z0-9-]+\.json$/i.test(sample.file));
+      if (!sampleCatalog.length) throw new Error('Danh sách không có file JSON bài mẫu hợp lệ.');
+      if (sampleCatalog.length === 1) return openSample(sampleCatalog[0].file);
+      $('#status').innerHTML = `<div class="msg ok">Chọn bài mẫu để mở:</div><div class="list">${sampleCatalog.map(sample =>
+        `<button class="btn" data-sample="${esc(sample.file)}">${esc(sample.title)}</button>`
+      ).join('')}</div>`;
+      document.querySelectorAll('[data-sample]').forEach(button => {
+        button.onclick = () => openSample(button.dataset.sample);
+      });
+    } catch (e) {
+      msg('Không tải được danh sách bài mẫu: ' + e.message, 'err');
+    }
+  };
   $('#go').onclick = analyze;
   setMode(S.inMode);
 
@@ -202,9 +295,24 @@ function newView() {
 }
 
 /* ===== Trang đọc ===== */
-function findEntry(w) {
+function findEntry(w, token) {
   const k = w.toLowerCase();
-  return S.cur.vocab.find(v => v.term?.toLowerCase() === k || v.lemma?.toLowerCase() === k) || S.cache[k] || (DEMO_DICT[k] && S.cur.demo ? DEMO_DICT[k] : null);
+  const exact = S.cur.vocab.find(v => [v.term, v.lemma, ...(v.matches || [])].some(term => term?.toLowerCase() === k));
+  if (exact) return exact;
+  if (token) {
+    const phrase = S.cur.vocab.find(entry => (entry.matches || []).some(match => {
+      if (!match.includes(' ') || !match.toLowerCase().split(/\s+/).includes(k)) return false;
+      const text = S.cur.text.toLowerCase(), target = match.toLowerCase();
+      let start = text.indexOf(target);
+      while (start !== -1) {
+        if (token.start >= start && token.end <= start + target.length) return true;
+        start = text.indexOf(target, start + 1);
+      }
+      return false;
+    }));
+    if (phrase) return phrase;
+  }
+  return S.cur.demo ? null : S.cache[k] || null;
 }
 function readView(id) {
   const p = S.passages.find(x => x.id === id);
@@ -218,7 +326,7 @@ function readView(id) {
       <a class="btn sm p" href="#/quiz/${p.id}">📝 Tạo đề đọc hiểu</a><button class="btn sm" id="play">🎧 Nghe bài đọc</button><button class="btn sm" id="pz">⏸</button><button class="btn sm" id="st">⏹</button>
       <select id="rate" aria-label="Tốc độ"><option value="0.75">0.75×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option></select>
       <select id="lang" aria-label="Giọng"><option>en-US</option><option>en-GB</option></select></div>
-    ${p.demo ? '<div class="msg ok">Chế độ demo: dữ liệu từ vựng là dữ liệu minh họa, chưa phải kết quả từ Gemini.</div>' : ''}
+    ${p.demo ? `<div class="msg ok">Bài mẫu dùng từ điển nguồn tĩnh; không gọi Gemini. ${p.vocabularyCoverage ? `Từ điển nguồn có bản dịch cho ${p.vocabularyCoverage.matched} từ xuất hiện trong bài.` : ''}</div>` : ''}
     <div class="text" id="text"></div></article>
     <aside class="card panel" id="panel" aria-live="polite"></aside></div>`;
   renderText(); renderPanel();
@@ -229,7 +337,9 @@ function readView(id) {
   $('#lang').onchange = e => pron.lang = e.target.value;
   const t = $('#text');
   t.onclick = e => {
-    const el = e.target.closest('.w'); if (!el || !getSelection().isCollapsed) return;
+    if (!getSelection().isCollapsed) return;
+    const el = e.target.closest('.w');
+    if (!el) { clearReadSelection(); return; }
     const i = +el.dataset.i;
     if (e.ctrlKey || e.metaKey) S.sel.has(i) ? S.sel.delete(i) : S.sel.add(i);
     else if (S.sel.has(i) && S.sel.size === 1) S.sel.delete(i); else { S.sel.clear(); S.sel.add(i); }
@@ -250,7 +360,7 @@ function renderText() {
     html += '<p>';
     for (const t of S.tokens.filter(t => t.start >= idx && t.end <= idx + para.length)) {
       if (!t.word) { html += esc(t.s); continue; }
-      const e = findEntry(t.s), c = ['w', e && 'v', S.sel.has(t.i) && 'sel', isSaved(t.s) && 'sv'].filter(Boolean).join(' ');
+      const e = findEntry(t.s, t), c = ['w', e && 'v', S.sel.has(t.i) && 'sel', isSaved(t.s) && 'sv'].filter(Boolean).join(' ');
       html += `<span class="${c}" data-i="${t.i}" tabindex="0" role="button">${esc(t.s)}</span>`;
     }
     html += '</p>';
@@ -264,11 +374,12 @@ function sentenceOf(t) {
 }
 async function lookup(t) {
   if (!t) return; // Đã thêm kiểm tra guard clause
-  const existing = findEntry(t.s);
+  const existing = findEntry(t.s, t);
   if (existing) { rememberLookup(t.s, existing); return renderPanel(); }
+  if (S.cur.demo) return renderPanel();
   S.busy = true; renderPanel();
   try { rememberLookup(t.s, await api('lookup', { word: t.s, sentence: sentenceOf(t) })); }
-  catch (e) { S.cache[t.s.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này. ' + (S.cur.demo ? 'Hãy chạy backend và đặt GEMINI_API_KEY để tra mọi từ.' : e.message) }; }
+  catch (e) { S.cache[t.s.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này. ' + e.message }; }
   S.busy = false; renderPanel(); renderText();
 }
 function rememberLookup(word, entry) {
@@ -288,12 +399,17 @@ function rememberLookup(word, entry) {
   }
 }
 function refresh() { renderText(); renderPanel(); bar(); }
+function clearReadSelection() {
+  S.sel.clear(); S.mode = 'none'; S.phrase = '';
+  getSelection().removeAllRanges();
+  refresh();
+}
 const selWords = () => [...S.sel].sort((a, b) => a - b).map(i => S.tokens[i].s);
 function card(e, word) {
   if (!e) return `<p>Không có dữ liệu.</p>`;
   if (e.error) return `<h3>${esc(word)}</h3><p>${esc(e.error)}</p>`;
   return `<div class="row" style="justify-content:space-between;margin-top:0"><h3>${esc(e.term || word)}</h3><button class="btn sm" data-say="${esc(e.term || word)}" aria-label="Phát âm">🔊</button></div>
-  <div class="ipa">${esc(e.ipa || '')} · ${esc(e.pos || '')}</div><div class="vi">${esc(e.vi)}</div><p style="color:var(--mut);margin:0">${esc(e.ctx || '')}</p>
+  ${e.ipa || e.pos ? `<div class="ipa">${[e.ipa, e.pos].filter(Boolean).map(esc).join(' · ')}</div>` : ''}<div class="vi">${esc(e.vi)}</div><p style="color:var(--mut);margin:0">${esc(e.ctx || '')}</p>
   ${e.defEn ? `<p><small>${esc(e.defEn)}</small></p>` : ''}
   ${e.exEn ? `<div class="ex"><small>VÍ DỤ</small><div>${esc(e.exEn)}</div><small>${esc(e.exVi || '')}</small></div>` : ''}
   ${e.syn?.length ? `<div class="chips ex"><small>Đồng nghĩa:</small> ${e.syn.map(s => `<span>${esc(s)}</span>`).join('')}</div>` : ''}
@@ -303,10 +419,11 @@ function card(e, word) {
 function renderPanel() {
   const el = $('#panel'); if (!el) return;
   if (S.mode === 'word') {
-    const w = selWords()[0];
-    el.innerHTML = S.busy ? '<p>Đang tra từ...</p>' : card(findEntry(w), w);
+    const token = S.tokens[[...S.sel][0]], w = token.s;
+    const entry = findEntry(w, token) || (S.cur.demo ? { error: 'Từ này chưa có trong từ điển nguồn của bài mẫu.' } : null);
+    el.innerHTML = S.busy ? '<p>Đang tra từ...</p>' : card(entry, w);
   } else if (S.mode === 'multi') {
-    el.innerHTML = `<h2>${S.sel.size} từ đã chọn</h2><div class="list">${selWords().map(w => { const e = findEntry(w);
+    el.innerHTML = `<h2>${S.sel.size} từ đã chọn</h2><div class="list">${[...S.sel].sort((a, b) => a - b).map(i => { const token = S.tokens[i], w = token.s, e = findEntry(w, token);
       return `<div class="item"><div><b>${esc(w)}</b> <small>${esc(e?.ipa || '')}</small><div>${esc(e?.vi || 'Chưa có dữ liệu')}</div></div><button class="btn sm" data-say="${esc(w)}">🔊</button></div>`; }).join('')}</div>
       <p style="color:var(--mut);font-size:14px">Các từ được xử lý riêng, không ghép thành cụm.</p>`;
   } else if (S.mode === 'phrase') {
@@ -334,7 +451,7 @@ function bar() {
     '<button class="btn sm" data-a="say">🔊 Nghe</button>' + (S.mode !== 'phrase' ? '<button class="btn sm" data-a="save">Lưu các từ đã chọn</button>' : '') + '<button class="btn sm" data-a="clr">Bỏ chọn</button>';
   b.onclick = async e => {
     const a = e.target.dataset.a; if (!a) return;
-    if (a === 'clr') { S.sel.clear(); S.mode = 'none'; getSelection().removeAllRanges(); refresh(); }
+    if (a === 'clr') clearReadSelection();
     if (a === 'say') pron.speak(S.mode === 'phrase' ? S.phrase : selWords().join(', '));
     if (a === 'save') { saveWords(selWords()); refresh(); }
     if (a === 'look') { for (const i of S.sel) await lookup(S.tokens[i]); renderPanel(); }
@@ -416,44 +533,172 @@ const DEMO_QUIZ = [
   { id: 'q3', question: 'In the passage, the word “tackle” is closest in meaning to:', options: ['deal with', 'ignore', 'avoid', 'postpone'], correct: 'A', explanation: 'To tackle a problem means to try to deal with it.', evidence: 'Governments and communities must work together to tackle climate change.', explanationVi: '“Tackle” nghĩa là giải quyết một vấn đề.', why: ['Correct meaning.', 'Opposite meaning.', 'Opposite meaning.', 'Not suggested.'] }
 ];
 const demoPublic = () => ({ quizId: 'demo', title: 'Reading Comprehension Quiz (demo)', level: 'B1', questionCount: 3, questions: DEMO_QUIZ.map(q => ({ id: q.id, type: 'single_choice', question: q.question, options: q.options.map((t, i) => ({ id: 'ABCD'[i], text: t })) })) });
-function demoGrade(ans) {
+function demoGrade(ans, questions = demoPublic().questions) {
   let correct = 0, wrong = 0, blank = 0;
-  const details = DEMO_QUIZ.map(q => { const c = ans[q.id], ok = c === q.correct; if (!c) blank++; else ok ? correct++ : wrong++;
+  const questionIds = new Set(questions.map(q => q.id));
+  const details = DEMO_QUIZ.filter(q => questionIds.has(q.id)).map(q => { const c = ans[q.id], ok = c === q.correct; if (!c) blank++; else ok ? correct++ : wrong++;
     return { id: q.id, chosen: c || null, correct: q.correct, isCorrect: ok, explanation: q.explanation, evidence: q.evidence, explanationVi: q.explanationVi, optionExplanations: Object.fromEntries(q.why.map((w, i) => ['ABCD'[i], w])) }; });
-  const total = DEMO_QUIZ.length;
+  const total = details.length;
+  return { total, correct, wrong, blank, percent: Math.round(correct / total * 100), score: Math.round(correct / total * 1000) / 100, details };
+}
+const DEMO_STOP_WORDS = new Set(`a about above after again against all am an and any are as at be because been before being below between both but by can could did do does doing down during each few for from further had has have having he her here hers herself him himself his how i if in into is it its itself just me more most my myself no nor not of off on once only or other our ours ourselves out over own same she should so some such than that the their theirs them themselves then there these they this those through to too under until up very was we were what when where which while who whom why will with would you your yours yourself yourselves aint dont does not isnt wasnt werent wont cant cannot im youre theyre weve weve about also another any because become being call came come day did each first get go good great like many may might new now one people said say see since still take tell thing think time two use used want well went why work world`.split(/\s+/));
+const demoWords = text => [...new Set((String(text).match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || [])
+  .filter(word => word.length >= 4 && !DEMO_STOP_WORDS.has(word.toLowerCase()))
+  .map(word => word.toLowerCase()))];
+function demoQuestionCapacity(text) { return Math.min(10, demoWords(text).length); }
+function makeDemoQuiz(p, count, lang, difficulty) {
+  const vocabulary = new Map();
+  for (const entry of p.vocab || []) {
+    for (const term of [entry.term, ...(entry.matches || [])]) {
+      if (term) vocabulary.set(term.toLowerCase(), entry.vi);
+    }
+  }
+  const meaningOf = word => vocabulary.get(word.toLowerCase()) || (lang === 'vi' ? 'từ khác trong bài đọc' : 'another word in the passage');
+  const sentences = (String(p.text).match(/[^.!?\n]+[.!?]?/g) || []).map(sentence => sentence.trim()).filter(Boolean);
+  const seen = new Set(), targets = [];
+  for (const sentence of sentences) {
+    const words = sentence.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || [];
+    for (const word of words) {
+      const key = word.toLowerCase();
+      if (word.length < 4 || DEMO_STOP_WORDS.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      targets.push({ word, sentence });
+    }
+  }
+  const allWords = demoWords(p.text);
+  if (allWords.length < 4) throw new Error('Bài đọc thử cần ít nhất 4 từ nội dung khác nhau để tạo phương án.');
+  if (targets.length < count) throw new Error(`Bài đọc chỉ đủ tạo ${targets.length} câu thử. Hãy giảm số câu hoặc dùng bài dài hơn.`);
+
+  const minLength = { easy: 4, medium: 5, hard: 6 }[difficulty] || 5;
+  const preferred = targets.filter(x => x.word.length >= minLength);
+  const chosen = [...(preferred.length >= count ? preferred : targets)].slice(0, count);
+  const questions = chosen.map(({ word, sentence }, i) => {
+    const distractors = allWords.filter(x => x !== word.toLowerCase())
+      .sort((a, b) => Math.abs(a.length - word.length) - Math.abs(b.length - word.length) || a.localeCompare(b))
+      .slice(0, 3);
+    if (distractors.length < 3) throw new Error('Không đủ từ khác nhau để tạo 4 phương án.');
+    const options = [word, ...distractors].sort(() => Math.random() - 0.5);
+    const correctAnswer = 'ABCD'[options.indexOf(word)];
+    const at = sentence.toLowerCase().indexOf(word.toLowerCase());
+    const cloze = sentence.slice(0, at) + '_____' + sentence.slice(at + word.length);
+    const vi = lang === 'vi';
+    const wordMeaning = meaningOf(word);
+    return {
+      id: `q${i + 1}`,
+      type: 'single_choice',
+      question: `${vi ? 'Chọn từ trong bài đọc để hoàn thành câu' : 'Choose the word from the passage to complete the sentence'}: "${cloze}"`,
+      options: options.map((text, index) => ({ id: 'ABCD'[index], text })),
+      correctAnswer,
+      explanation: `The missing word is "${word}" (${wordMeaning}). The passage states: "${sentence}" This is a vocabulary-in-context question: the exact word removed from the original sentence is the answer.`,
+      evidence: sentence,
+      explanationVi: `Câu gốc viết: “${sentence}” Chỗ trống thay cho đúng từ “${word}”, có nghĩa là “${wordMeaning}” trong ngữ cảnh này. Đối chiếu câu đầy đủ với bài đọc giúp xác nhận đáp án.`,
+      optionExplanations: Object.fromEntries(options.map((option, index) => [
+        'ABCD'[index],
+        option === word
+          ? (vi
+            ? `Đúng: “${option}” nghĩa là “${meaningOf(option)}” và là từ chính xác xuất hiện ở vị trí này trong câu gốc.`
+            : `Correct: "${option}" means "${meaningOf(option)}" and is the exact word used at this point in the original sentence.`)
+          : (vi
+            ? `Chưa đúng: “${option}” nghĩa là “${meaningOf(option)}”, nhưng câu trích dẫn không dùng từ này ở chỗ trống. Thay vào sẽ không khớp nguyên văn bài đọc.`
+            : `Not correct: "${option}" means "${meaningOf(option)}", but the quoted sentence does not use it in the blank. Choosing it would not match the original passage.`)
+      ]))
+    };
+  });
+  return {
+    quizId: 'local-demo',
+    title: `${p.title} — ${lang === 'vi' ? 'Bài kiểm tra thử' : 'Demo quiz'}`,
+    level: p.level,
+    questionCount: questions.length,
+    questions
+  };
+}
+function gradeDemoQuiz(questions, answers) {
+  let correct = 0, wrong = 0, blank = 0;
+  const details = questions.map(q => {
+    const chosen = ['A', 'B', 'C', 'D'].includes(answers[q.id]) ? answers[q.id] : null;
+    const isCorrect = chosen === q.correctAnswer;
+    if (!chosen) blank++; else if (isCorrect) correct++; else wrong++;
+    return {
+      id: q.id, chosen, correct: q.correctAnswer, isCorrect,
+      explanation: q.explanation, evidence: q.evidence, explanationVi: q.explanationVi,
+      optionExplanations: q.optionExplanations
+    };
+  });
+  const total = questions.length;
   return { total, correct, wrong, blank, percent: Math.round(correct / total * 100), score: Math.round(correct / total * 1000) / 100, details };
 }
 function quizView(id) {
   const p = S.passages.find(x => x.id === id); if (!p) return (location.hash = '#/new');
-  S.cur = p; S.tokens = tokenize(p.text); S.mode = 'none';
+  hideBar(); S.cur = p; S.tokens = tokenize(p.text); S.sel.clear(); S.mode = 'none';
   const z = QZ[id];
+  if (p.demo && p.quiz?.questions?.length && z?.quiz?.sourceQuizId === p.sampleId) {
+    return z.result ? quizResult(p, z) : quizTake(p, z);
+  }
   if (!z?.quiz) return quizConfig(p);
   z.result ? quizResult(p, z) : quizTake(p, z);
 }
 function quizConfig(p) {
   const paras = p.text.split(/\n{2,}/).filter(x => x.trim());
-  let count = 5;
+  if (p.demo && p.quiz?.questions?.length) {
+    const sampleQuiz = p.quiz;
+    $('#view').innerHTML = `<h1>${esc(sampleQuiz.title || `${p.title} — Bài kiểm tra mẫu`)}</h1>
+      <p class="sub">${esc(p.title)} · ${sampleQuiz.questions.length} câu hỏi soạn sẵn.</p>
+      <div class="card">${sampleQuiz.instructions ? `<p>${esc(sampleQuiz.instructions)}</p>` : ''}
+        <div class="row"><button class="btn p" id="startSampleQuiz">Bắt đầu bài kiểm tra mẫu</button>
+        <a class="btn" href="#/read/${p.id}">Quay lại bài đọc</a></div></div>`;
+    $('#startSampleQuiz').onclick = () => {
+      const questions = sampleQuiz.questions.map(question => ({
+        ...question, type: question.type || 'single_choice'
+      }));
+      QZ[p.id] = {
+        quiz: {
+          quizId: 'local-demo',
+          title: sampleQuiz.title || `${p.title} — Bài kiểm tra mẫu`,
+          level: sampleQuiz.level || p.level,
+          questionCount: questions.length,
+          questions
+        },
+        answers: {}, start: Date.now(), result: null
+      };
+      if (qsave()) quizView(p.id);
+    };
+    return;
+  }
+  let demoLimit = p.demo ? demoQuestionCapacity(p.text) : 10;
+  let count = Math.min(5, demoLimit) || 1;
   $('#view').innerHTML = `<h1>Tạo đề đọc hiểu</h1><p class="sub">${esc(p.title)} · câu hỏi chỉ dựa trên nội dung bài đọc.</p>
-  <div class="card"><b>Số câu hỏi</b><div class="row" id="cnt" role="radiogroup" aria-label="Số câu hỏi">${[1,2,3,4,5,6,7,8,9,10].map(n => `<button class="btn sm ${n === 5 ? 'p' : ''}" data-n="${n}" role="radio">${n}</button>`).join('')}</div>
+  <div class="card"><b>Số câu hỏi</b><div class="row" id="cnt" role="radiogroup" aria-label="Số câu hỏi">${[1,2,3,4,5,6,7,8,9,10].map(n => `<button class="btn sm ${n === count ? 'p' : ''}" data-n="${n}" role="radio" ${p.demo && n > demoLimit ? 'disabled' : ''}>${n}</button>`).join('')}</div>
   <div class="row"><label>Trình độ <select id="ql">${['A2','B1','B2','C1'].map(l => `<option ${l === p.level ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
   <label>Ngôn ngữ câu hỏi <select id="qg"><option value="en">Tiếng Anh</option><option value="vi">Tiếng Việt</option></select></label>
   <label>Độ khó <select id="qd"><option value="easy">Dễ</option><option value="medium" selected>Trung bình</option><option value="hard">Khó</option></select></label>
   <label>Phạm vi <select id="qs"><option value="-1">Toàn bộ bài đọc</option>${paras.map((t, i) => `<option value="${i}">Đoạn ${i + 1}: ${esc(t.slice(0, 40))}…</option>`).join('')}</select></label></div>
-  <div id="qst"></div><div class="row"><button class="btn p" id="gen">✨ Tạo đề đọc hiểu bằng AI</button><a class="btn" href="#/read/${p.id}">Quay lại bài đọc</a></div></div>`;
-  $('#cnt').onclick = e => { const b = e.target.closest('[data-n]'); if (!b) return; count = +b.dataset.n; document.querySelectorAll('#cnt .btn').forEach(x => x.classList.toggle('p', x === b)); };
+  <div id="qst">${p.demo ? `<div class="msg ok">Chế độ thử: tạo câu điền từ trực tiếp từ bài đọc, không cần Gemini. Tối đa ${demoLimit} câu.</div>` : ''}</div><div class="row"><button class="btn p" id="gen" ${p.demo && !demoLimit ? 'disabled' : ''}>${p.demo ? '✨ Tạo bài kiểm tra thử' : '✨ Tạo đề đọc hiểu bằng AI'}</button><a class="btn" href="#/read/${p.id}">Quay lại bài đọc</a></div></div>`;
+  $('#cnt').onclick = e => { const b = e.target.closest('[data-n]'); if (!b || b.disabled) return; count = +b.dataset.n; document.querySelectorAll('#cnt .btn').forEach(x => x.classList.toggle('p', x === b)); };
   const msg = (t, k) => $('#qst').innerHTML = t ? `<div class="msg ${k}" role="alert">${esc(t)}</div>` : '';
-  $('#gen').onclick = async () => {
+  const gen = $('#gen');
+  if (p.demo) {
+    const updateDemoCapacity = () => {
+      const scope = +$('#qs').value, text = scope < 0 ? p.text : paras[scope];
+      demoLimit = demoQuestionCapacity(text);
+      document.querySelectorAll('#cnt [data-n]').forEach(button => { button.disabled = +button.dataset.n > demoLimit; });
+      if (count > demoLimit) count = Math.min(5, demoLimit) || 1;
+      document.querySelectorAll('#cnt [data-n]').forEach(button => button.classList.toggle('p', +button.dataset.n === count));
+      gen.disabled = demoLimit === 0;
+      msg(`Chế độ thử: tạo câu điền từ trực tiếp từ phạm vi bài đọc đã chọn, không cần Gemini. Tối đa ${demoLimit} câu.`, 'ok');
+    };
+    $('#qs').onchange = updateDemoCapacity;
+    updateDemoCapacity();
+  }
+  gen.onclick = async () => {
     const btn = $('#gen'), si = +$('#qs').value, text = si < 0 ? p.text : paras[si];
     btn.disabled = true; btn.textContent = 'Đang tạo và kiểm tra đề...'; msg('');
     try {
       let quiz;
       if (p.demo) {
-        if (p.text !== SAMPLE.text) throw new Error('Chế độ demo chỉ có đề mẫu cho bài mẫu. Hãy chạy backend Gemini để tạo đề cho bài của bạn.');
-        if (count > 3) throw new Error('Đề demo chỉ có 3 câu. Hãy chọn tối đa 3 câu hoặc chạy backend.');
-        quiz = demoPublic(); quiz.questions = quiz.questions.slice(0, count); quiz.questionCount = count;
+        quiz = makeDemoQuiz(p, count, $('#qg').value, $('#qd').value);
       } else quiz = await api('quiz', { text, count, level: $('#ql').value, lang: $('#qg').value, difficulty: $('#qd').value, title: p.title });
       QZ[p.id] = { quiz, answers: {}, start: Date.now(), result: null }; qsave(); quizView(p.id);
-    } catch (e) { msg(e.message, 'err'); btn.disabled = false; btn.textContent = '✨ Tạo đề đọc hiểu bằng AI'; }
+    } catch (e) { msg(e.message, 'err'); btn.disabled = false; btn.textContent = p.demo ? '✨ Tạo bài kiểm tra thử' : '✨ Tạo đề đọc hiểu bằng AI'; }
   };
 }
 function bindLookup(root) {
@@ -462,10 +707,18 @@ function bindLookup(root) {
     const el = e.target.closest('.qw'); if (!el) return;
     e.preventDefault(); const w = el.textContent;
     pop.hidden = false; pop.innerHTML = '<p>Đang tra từ...</p>';
-    const existing = findEntry(w);
-    if (existing) rememberLookup(w, existing);
-    else { try { rememberLookup(w, await api('lookup', { word: w, sentence: el.closest('[data-ctx]')?.dataset.ctx || w })); } catch (er) { S.cache[w.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này.' }; } }
-    pop.innerHTML = `<button class="btn sm" id="xp" style="float:right" aria-label="Đóng">✕</button>` + card(findEntry(w), w);
+    let entry = findEntry(w);
+    if (entry) rememberLookup(w, entry);
+    else if (S.cur.demo) entry = { error: 'Từ này chưa có trong từ điển nguồn của bài mẫu.' };
+    else {
+      try {
+        entry = await api('lookup', { word: w, sentence: el.closest('[data-ctx]')?.dataset.ctx || w });
+        rememberLookup(w, entry);
+      } catch (er) {
+        entry = S.cache[w.toLowerCase()] = { error: 'Chưa có dữ liệu cho từ này.' };
+      }
+    }
+    pop.innerHTML = `<button class="btn sm" id="xp" style="float:right" aria-label="Đóng">✕</button>` + card(entry, w);
     $('#xp').onclick = () => pop.hidden = true;
     pop.querySelectorAll('[data-say]').forEach(b => b.onclick = () => pron.speak(b.dataset.say));
     pop.querySelectorAll('[data-save]').forEach(b => b.onclick = () => { saveWords([b.dataset.save]); b.textContent = '✓ Đã lưu'; });
@@ -492,7 +745,9 @@ function quizTake(p, z) {
     if (blank && !confirm(`Còn ${blank} câu chưa trả lời. Bạn vẫn muốn nộp bài?`)) return;
     $('#sub').disabled = true; $('#sub').textContent = 'Đang chấm...';
     try {
-      const r = z.quiz.quizId === 'demo' ? demoGrade(z.answers) : await api('quiz/grade', { quizId: z.quiz.quizId, answers: z.answers });
+      const r = z.quiz.quizId === 'demo' ? demoGrade(z.answers, z.quiz.questions)
+        : z.quiz.quizId === 'local-demo' ? gradeDemoQuiz(z.quiz.questions, z.answers)
+          : await api('quiz/grade', { quizId: z.quiz.quizId, answers: z.answers });
       r.elapsed = Math.round((Date.now() - z.start) / 1000); z.result = r; z.showExp = false; qsave(); quizView(p.id);
     } catch (e) { $('#qe').innerHTML = `<div class="msg err" role="alert">${esc(e.message)}</div>`; $('#sub').disabled = false; $('#sub').textContent = 'Nộp bài'; }
   };

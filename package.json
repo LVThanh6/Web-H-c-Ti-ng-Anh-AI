@@ -3,6 +3,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "demo": "node server.js",
+    "build:samples": "node scripts/build-samples.js",
     "check": "node --check app.js && node --check server.js"
   },
   "dependencies": {
